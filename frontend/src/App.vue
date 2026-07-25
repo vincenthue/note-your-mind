@@ -452,7 +452,7 @@ import { marked } from 'marked'
 
 const props  = defineProps({ user: Object })
 const emit   = defineEmits(['logout'])
-const api    = axios.create({ baseURL: 'http://localhost:3000' })
+const api    = axios.create({ baseURL: 'https://note-your-mind-production.up.railway.app' })
 const userId = () => props.user?.id || 0
 
 // ── State ──

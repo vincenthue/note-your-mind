@@ -178,7 +178,7 @@ import { ref, reactive } from 'vue'
 import axios from 'axios'
 
 const emit = defineEmits(['login'])
-const api  = axios.create({ baseURL: 'http://localhost:3000' })
+const api  = axios.create({ baseURL: 'https://note-your-mind-production.up.railway.app' })
 
 const page         = ref('signup')
 const signupMethod = ref('email')

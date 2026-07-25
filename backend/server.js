@@ -7,7 +7,9 @@ const db         = require('./db');
 const app  = express();
 const PORT = 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: ['https://note-your-mind-vincenthue1.vercel.app', 'http://localhost:5174', 'http://localhost']
+}));
 app.use(express.json());
 
 // ── Email transporter ─────────────────────────────
