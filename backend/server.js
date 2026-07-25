@@ -47,6 +47,7 @@ function generateOTP() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+/*
 // ── Dev only ⚠️ DELETE BEFORE DEPLOYMENT ─────────
 app.get('/api/dev/all', async (req, res) => {
   try {
@@ -58,6 +59,7 @@ app.get('/api/dev/all', async (req, res) => {
     res.json({ success: true, data: result });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
+*/
 
 // ── Availability checks ───────────────────────────
 app.post('/api/auth/check/username', async (req, res) => {
