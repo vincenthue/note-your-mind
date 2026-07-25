@@ -1,8 +1,9 @@
 const express    = require('express');
 const cors       = require('cors');
 const crypto     = require('crypto');
-const nodemailer = require('nodemailer');
 const db         = require('./db');
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const app  = express();
 const PORT = 3000;
@@ -13,17 +14,9 @@ app.use(cors({
 app.use(express.json());
 
 // ── Email transporter ─────────────────────────────
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: 'vincenthws888@gmail.com',
-    pass: 'fwnk haza vbgx znkj',
-  },
-});
-
 async function sendOTPEmail(toEmail, code) {
-  await transporter.sendMail({
-    from: '"Note Your Mind 📝" <vincenthws888@gmail.com>',
+  await resend.emails.send({
+    from: 'Note Your Mind <onboarding@resend.dev>',
     to: toEmail,
     subject: 'Your Note Your Mind Verification Code',
     html: `
