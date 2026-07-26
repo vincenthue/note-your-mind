@@ -16,7 +16,7 @@ app.use(express.json());
 // ── Email transporter ─────────────────────────────
 async function sendOTPEmail(toEmail, code) {
   await resend.emails.send({
-    from: 'Note Your Mind <onboarding@resend.dev>',
+    from: 'Note Your Mind <noreply@noteyourmind.com>',
     to: toEmail,
     subject: 'Your Note Your Mind Verification Code',
     html: `
