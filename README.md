@@ -52,8 +52,8 @@ cd note-your-mind
 docker-compose up --build
 ```
 
-- Frontend: [http://localhost](http://localhost)
-- Backend API: [http://localhost:3000](http://localhost:3000)
+- Frontend: [https://noteyourmind.com](https://noteyourmind.com)
+- Backend API: [https://note-your-mind-production.up.railway.app](https://note-your-mind-production.up.railway.app)
 
 ---
 
