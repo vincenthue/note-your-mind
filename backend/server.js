@@ -3,237 +3,300 @@ const cors       = require('cors');
 const crypto     = require('crypto');
 const db         = require('./db');
 const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
+
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 const app  = express();
-const PORT = 3000;
+const PORT = 3000; // Railway routes to this port
 
 app.use(cors({
   origin: [
     'https://noteyourmind.com',
     'https://www.noteyourmind.com',
     'https://note-your-mind-vincenthue1.vercel.app',
+    'http://localhost:5173',
     'http://localhost:5174',
-    'http://localhost'
-  ]
+    'http://localhost',
+  ],
 }));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
-// ── Email transporter ─────────────────────────────
+// ── Email ─────────────────────────────────────────
 async function sendOTPEmail(toEmail, code) {
+  if (!resend) {
+    console.log(`📨 [dev] RESEND_API_KEY not set — OTP for ${toEmail}: ${code}`);
+    return;
+  }
   await resend.emails.send({
     from: 'Note Your Mind <noreply@noteyourmind.com>',
     to: toEmail,
-    subject: 'Your Note Your Mind Verification Code',
+    subject: 'Your Note Your Mind verification code',
     html: `
-      <div style="font-family:Inter,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0C0A1E;border-radius:16px;color:#EDE9FE;">
-        <h2 style="color:#A855F7;margin-bottom:8px;">Note Your Mind</h2>
-        <p style="color:#C4BCFA;margin-bottom:24px;">Your verification code is:</p>
-        <div style="background:#1a1050;border:1px solid rgba(99,102,241,0.4);border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
-          <span style="font-size:36px;font-weight:800;letter-spacing:12px;color:#A855F7;">${code}</span>
+      <div style="font-family:Inter,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0E0F12;border-radius:12px;color:#E6E7EA;">
+        <h2 style="color:#E6E7EA;margin:0 0 8px;font-weight:600;">Note Your Mind</h2>
+        <p style="color:#9A9CA5;margin:0 0 24px;">Your verification code is:</p>
+        <div style="background:#16171C;border:1px solid #2A2C33;border-radius:10px;padding:24px;text-align:center;margin-bottom:24px;">
+          <span style="font-size:34px;font-weight:700;letter-spacing:10px;color:#8B93FF;">${code}</span>
         </div>
-        <p style="color:#6B7280;font-size:13px;">This code expires in 10 minutes. Do not share it with anyone.</p>
-      </div>
-    `,
+        <p style="color:#6B6E78;font-size:13px;margin:0;">This code expires in 10 minutes. Do not share it with anyone.</p>
+      </div>`,
   });
-  console.log(`📨 OTP sent to ${toEmail}: ${code}`);
 }
 
-// ── Helpers ───────────────────────────────────────
+// ── Password hashing (scrypt, with legacy HMAC fallback) ──
 function hashPassword(password) {
-  const salt = 'mynotes_salt_2026';
-  return crypto.createHmac('sha256', salt).update(password).digest('hex');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt$${salt}$${hash}`;
+}
+function legacyHash(password) {
+  return crypto.createHmac('sha256', 'mynotes_salt_2026').update(password).digest('hex');
+}
+function safeEqual(a, b) {
+  const ba = Buffer.from(a), bb = Buffer.from(b);
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+function verifyPassword(password, stored) {
+  if (stored.startsWith('scrypt$')) {
+    const [, salt, hash] = stored.split('$');
+    return safeEqual(crypto.scryptSync(password, salt, 64).toString('hex'), hash);
+  }
+  return safeEqual(legacyHash(password), stored);
 }
 function generateOTP() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
-/*
-// ── Dev only ⚠️ DELETE BEFORE DEPLOYMENT ─────────
-app.get('/api/dev/all', async (req, res) => {
+// ── Sessions ──────────────────────────────────────
+const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
+const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
+
+async function createSession(userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await db.exec_run('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)',
+    [sha256(token), userId, Date.now() + SESSION_TTL]);
+  return token;
+}
+
+async function requireAuth(req, res, next) {
   try {
-    const users = await db.exec_all('SELECT id, username, email FROM users');
-    const result = await Promise.all(users.map(async u => ({
-      ...u,
-      notes: await db.exec_all('SELECT id, title, created_at, updated_at, deleted_at FROM notes WHERE user_id = ?', [u.id])
-    })));
-    res.json({ success: true, data: result });
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ success: false, message: 'Please sign in.' });
+    const session = await db.exec_get('SELECT * FROM sessions WHERE token_hash = ?', [sha256(token)]);
+    if (!session || session.expires_at < Date.now())
+      return res.status(401).json({ success: false, message: 'Session expired. Please sign in again.' });
+    req.userId = session.user_id;
+    req.tokenHash = session.token_hash;
+    next();
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+}
+
+const wrap = fn => (req, res) => fn(req, res).catch(e => {
+  console.error(e);
+  res.status(500).json({ success: false, message: 'Server error.' });
 });
-*/
+
+const STATUSES = ['todo', 'doing', 'done'];
+
+app.get('/', (req, res) => res.json({ ok: true, service: 'note-your-mind-api' }));
 
 // ── Availability checks ───────────────────────────
-app.post('/api/auth/check/username', async (req, res) => {
+app.post('/api/auth/check/username', wrap(async (req, res) => {
   const { username } = req.body;
   if (!username) return res.status(400).json({ success: false, message: 'Username required.' });
   const exists = await db.exec_get('SELECT id FROM users WHERE username = ?', [username]);
   if (exists) return res.status(409).json({ success: false, message: 'Username already taken.' });
   res.json({ success: true });
-});
+}));
 
-app.post('/api/auth/check/email', async (req, res) => {
+app.post('/api/auth/check/email', wrap(async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ success: false, message: 'Email required.' });
   const exists = await db.exec_get('SELECT id FROM users WHERE email = ?', [email]);
   if (exists) return res.status(409).json({ success: false, message: 'Email already registered.' });
   res.json({ success: true });
-});
+}));
 
-// ── Auth Routes ───────────────────────────────────
-app.post('/api/auth/signup/email', async (req, res) => {
-  try {
-    const { email, username, password, confirmPassword } = req.body;
-    if (!email || !username || !password || !confirmPassword)
-      return res.status(400).json({ success: false, message: 'All fields are required.' });
-    if (password !== confirmPassword)
-      return res.status(400).json({ success: false, message: 'Passwords do not match.' });
-    if (password.length < 6)
-      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
-    if (!email.includes('@'))
-      return res.status(400).json({ success: false, message: 'Invalid email address.' });
-    if (await db.exec_get('SELECT id FROM users WHERE username = ?', [username]))
-      return res.status(409).json({ success: false, message: 'Username already taken.' });
-    if (await db.exec_get('SELECT id FROM users WHERE email = ?', [email]))
-      return res.status(409).json({ success: false, message: 'Email already registered.' });
-    const result = await db.exec_run('INSERT INTO users (username, password, email) VALUES (?, ?, ?)', [username, hashPassword(password), email]);
-    const user = await db.exec_get('SELECT id, username, email FROM users WHERE id = ?', [result.lastInsertRowid]);
-    res.status(201).json({ success: true, data: user });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
-});
+// ── Auth ──────────────────────────────────────────
+app.post('/api/auth/signup/email', wrap(async (req, res) => {
+  const { email, username, password, confirmPassword } = req.body;
+  if (!email || !username || !password || !confirmPassword)
+    return res.status(400).json({ success: false, message: 'All fields are required.' });
+  if (password !== confirmPassword)
+    return res.status(400).json({ success: false, message: 'Passwords do not match.' });
+  if (password.length < 6)
+    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return res.status(400).json({ success: false, message: 'Invalid email address.' });
+  if (await db.exec_get('SELECT id FROM users WHERE username = ?', [username]))
+    return res.status(409).json({ success: false, message: 'Username already taken.' });
+  if (await db.exec_get('SELECT id FROM users WHERE email = ?', [email]))
+    return res.status(409).json({ success: false, message: 'Email already registered.' });
+  const r = await db.exec_run('INSERT INTO users (username, password, email) VALUES (?, ?, ?)',
+    [username, hashPassword(password), email]);
+  const user = await db.exec_get('SELECT id, username, email FROM users WHERE id = ?', [r.lastInsertRowid]);
+  const token = await createSession(user.id);
+  res.status(201).json({ success: true, data: { ...user, token } });
+}));
 
-app.post('/api/auth/signin', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    if (!username || !password)
-      return res.status(400).json({ success: false, message: 'Username and password are required.' });
-    const user = await db.exec_get('SELECT * FROM users WHERE username = ?', [username]);
-    if (!user || hashPassword(password) !== user.password)
-      return res.status(401).json({ success: false, message: 'Invalid username or password.' });
-    res.json({ success: true, data: { id: user.id, username: user.username, email: user.email } });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
-});
+app.post('/api/auth/signin', wrap(async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password)
+    return res.status(400).json({ success: false, message: 'Username and password are required.' });
+  const user = await db.exec_get('SELECT * FROM users WHERE username = ? OR email = ?', [username, username]);
+  if (!user || !verifyPassword(password, user.password))
+    return res.status(401).json({ success: false, message: 'Invalid username or password.' });
+  if (!user.password.startsWith('scrypt$'))
+    await db.exec_run('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), user.id]);
+  const token = await createSession(user.id);
+  res.json({ success: true, data: { id: user.id, username: user.username, email: user.email, token } });
+}));
 
-app.post('/api/auth/forgot-password/send', async (req, res) => {
+app.get('/api/auth/me', requireAuth, wrap(async (req, res) => {
+  const user = await db.exec_get('SELECT id, username, email FROM users WHERE id = ?', [req.userId]);
+  if (!user) return res.status(401).json({ success: false, message: 'Account not found.' });
+  res.json({ success: true, data: user });
+}));
+
+app.post('/api/auth/signout', requireAuth, wrap(async (req, res) => {
+  await db.exec_run('DELETE FROM sessions WHERE token_hash = ?', [req.tokenHash]);
+  res.json({ success: true });
+}));
+
+app.post('/api/auth/forgot-password/send', wrap(async (req, res) => {
+  const { target } = req.body;
+  if (!target) return res.status(400).json({ success: false, message: 'Email is required.' });
+  const user = await db.exec_get('SELECT id FROM users WHERE email = ?', [target]);
+  if (!user) return res.status(404).json({ success: false, message: 'No account found with this email.' });
+  const code    = generateOTP();
+  const expires = Date.now() + 10 * 60 * 1000;
+  await db.exec_run('UPDATE otps SET used = 1 WHERE target = ?', [target]);
+  await db.exec_run('INSERT INTO otps (target, code, expires_at) VALUES (?, ?, ?)', [target, code, expires]);
   try {
-    const { target } = req.body;
-    if (!target) return res.status(400).json({ success: false, message: 'Email is required.' });
-    const user = await db.exec_get('SELECT id FROM users WHERE email = ?', [target]);
-    if (!user) return res.status(404).json({ success: false, message: 'No account found with this email.' });
-    const code    = generateOTP();
-    const expires = Date.now() + 10 * 60 * 1000;
-    await db.exec_run('UPDATE otps SET used = 1 WHERE target = ?', [target]);
-    await db.exec_run('INSERT INTO otps (target, code, expires_at) VALUES (?, ?, ?)', [target, code, expires]);
     await sendOTPEmail(target, code);
-    res.json({ success: true, message: 'Verification code sent to your email.' });
   } catch (err) {
     console.error('Email error:', err.message);
-    res.status(500).json({ success: false, message: 'Failed to send email.' });
+    return res.status(500).json({ success: false, message: 'Failed to send email.' });
   }
-});
+  res.json({ success: true, message: 'Verification code sent to your email.' });
+}));
 
-app.post('/api/auth/forgot-password/verify', async (req, res) => {
-  try {
-    const { target, code, newPassword, confirmPassword } = req.body;
-    if (!target || !code || !newPassword || !confirmPassword)
-      return res.status(400).json({ success: false, message: 'All fields are required.' });
-    if (newPassword !== confirmPassword)
-      return res.status(400).json({ success: false, message: 'Passwords do not match.' });
-    const otp = await db.exec_get('SELECT * FROM otps WHERE target = ? AND used = 0 ORDER BY id DESC LIMIT 1', [target]);
-    if (!otp || Date.now() > otp.expires_at)
-      return res.status(400).json({ success: false, message: 'OTP expired or not found.' });
-    if (otp.code !== code)
-      return res.status(400).json({ success: false, message: 'Incorrect OTP code.' });
-    await db.exec_run('UPDATE users SET password = ? WHERE email = ?', [hashPassword(newPassword), target]);
-    await db.exec_run('UPDATE otps SET used = 1 WHERE id = ?', [otp.id]);
-    res.json({ success: true, message: 'Password reset successfully.' });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
-});
+app.post('/api/auth/forgot-password/verify', wrap(async (req, res) => {
+  const { target, code, newPassword, confirmPassword } = req.body;
+  if (!target || !code || !newPassword || !confirmPassword)
+    return res.status(400).json({ success: false, message: 'All fields are required.' });
+  if (newPassword !== confirmPassword)
+    return res.status(400).json({ success: false, message: 'Passwords do not match.' });
+  if (newPassword.length < 6)
+    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+  const otp = await db.exec_get('SELECT * FROM otps WHERE target = ? AND used = 0 ORDER BY id DESC LIMIT 1', [target]);
+  if (!otp || Date.now() > otp.expires_at)
+    return res.status(400).json({ success: false, message: 'Code expired or not found. Request a new one.' });
+  if (otp.code !== String(code).trim()) {
+    const attempts = otp.attempts + 1;
+    await db.exec_run('UPDATE otps SET attempts = ?, used = ? WHERE id = ?', [attempts, attempts >= 5 ? 1 : 0, otp.id]);
+    return res.status(400).json({ success: false, message: attempts >= 5 ? 'Too many attempts. Request a new code.' : 'Incorrect code.' });
+  }
+  const user = await db.exec_get('SELECT id FROM users WHERE email = ?', [target]);
+  await db.exec_run('UPDATE users SET password = ? WHERE email = ?', [hashPassword(newPassword), target]);
+  await db.exec_run('UPDATE otps SET used = 1 WHERE id = ?', [otp.id]);
+  if (user) await db.exec_run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
+  res.json({ success: true, message: 'Password reset successfully.' });
+}));
 
-// ── Notes Routes ──────────────────────────────────
-app.get('/api/notes', async (req, res) => {
-  try {
-    const { q, tag, user_id } = req.query;
-    if (!user_id) return res.status(400).json({ success: false, message: 'user_id required' });
-    let sql = 'SELECT * FROM notes WHERE deleted_at IS NULL AND user_id = ?';
-    const params = [user_id];
-    if (q)   { sql += ' AND (title LIKE ? OR content LIKE ?)'; params.push(`%${q}%`, `%${q}%`); }
-    if (tag) { sql += " AND (',' || tags || ',' LIKE ?)"; params.push(`%,${tag},%`); }
-    sql += ' ORDER BY updated_at DESC';
-    res.json({ success: true, data: await db.exec_all(sql, params) });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+// ── Notes (all scoped to the signed-in user) ─────
+app.use('/api/notes', requireAuth);
 
-app.get('/api/notes/trash', async (req, res) => {
-  try {
-    const { user_id } = req.query;
-    if (!user_id) return res.status(400).json({ success: false, message: 'user_id required' });
-    res.json({ success: true, data: await db.exec_all('SELECT * FROM notes WHERE deleted_at IS NOT NULL AND user_id = ? ORDER BY deleted_at DESC', [user_id]) });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+const getOwnNote = (id, userId) =>
+  db.exec_get('SELECT * FROM notes WHERE id = ? AND user_id = ?', [id, userId]);
 
-app.get('/api/notes/tags', async (req, res) => {
-  try {
-    const { user_id } = req.query;
-    if (!user_id) return res.status(400).json({ success: false, message: 'user_id required' });
-    const rows = await db.exec_all("SELECT tags FROM notes WHERE deleted_at IS NULL AND user_id = ? AND tags != ''", [user_id]);
-    const tagSet = new Set();
-    rows.forEach(r => r.tags.split(',').map(t => t.trim()).filter(Boolean).forEach(t => tagSet.add(t)));
-    res.json({ success: true, data: [...tagSet].sort() });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+app.get('/api/notes', wrap(async (req, res) => {
+  const { q, tag } = req.query;
+  let sql = 'SELECT * FROM notes WHERE deleted_at IS NULL AND user_id = ?';
+  const params = [req.userId];
+  if (q)   { sql += ' AND (title LIKE ? OR content LIKE ?)'; params.push(`%${q}%`, `%${q}%`); }
+  if (tag) { sql += " AND (',' || tags || ',' LIKE ?)"; params.push(`%,${tag},%`); }
+  sql += ' ORDER BY updated_at DESC';
+  res.json({ success: true, data: await db.exec_all(sql, params) });
+}));
 
-app.get('/api/notes/:id', async (req, res) => {
-  try {
-    const note = await db.exec_get('SELECT * FROM notes WHERE id = ?', [req.params.id]);
-    if (!note) return res.status(404).json({ success: false, message: 'Note not found' });
-    res.json({ success: true, data: note });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+app.get('/api/notes/trash', wrap(async (req, res) => {
+  res.json({ success: true, data: await db.exec_all(
+    'SELECT * FROM notes WHERE deleted_at IS NOT NULL AND user_id = ? ORDER BY deleted_at DESC', [req.userId]) });
+}));
 
-app.post('/api/notes', async (req, res) => {
-  try {
-    const { title, content, tags, user_id } = req.body;
-    if (!title)   return res.status(400).json({ success: false, message: 'Title is required' });
-    if (!content || !content.trim()) return res.status(400).json({ success: false, message: 'Content is required' });
-    if (!user_id) return res.status(400).json({ success: false, message: 'user_id required' });
-    const r = await db.exec_run('INSERT INTO notes (user_id, title, content, tags) VALUES (?, ?, ?, ?)', [user_id, title, content, tags || '']);
-    res.status(201).json({ success: true, data: await db.exec_get('SELECT * FROM notes WHERE id = ?', [r.lastInsertRowid]) });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+app.get('/api/notes/tags', wrap(async (req, res) => {
+  const rows = await db.exec_all("SELECT tags FROM notes WHERE deleted_at IS NULL AND user_id = ? AND tags != ''", [req.userId]);
+  const tagSet = new Set();
+  rows.forEach(r => r.tags.split(',').map(t => t.trim()).filter(Boolean).forEach(t => tagSet.add(t)));
+  res.json({ success: true, data: [...tagSet].sort() });
+}));
 
-app.put('/api/notes/:id', async (req, res) => {
-  try {
-    const { title, content, tags } = req.body;
-    if (!title)   return res.status(400).json({ success: false, message: 'Title is required' });
-    if (!content || !content.trim()) return res.status(400).json({ success: false, message: 'Content is required' });
-    const r = await db.exec_run('UPDATE notes SET title=?, content=?, tags=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL', [title, content, tags || '', req.params.id]);
-    if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
-    res.json({ success: true, data: await db.exec_get('SELECT * FROM notes WHERE id = ?', [req.params.id]) });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+app.get('/api/notes/:id', wrap(async (req, res) => {
+  const note = await getOwnNote(req.params.id, req.userId);
+  if (!note) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true, data: note });
+}));
 
-app.delete('/api/notes/:id', async (req, res) => {
-  try {
-    const r = await db.exec_run('UPDATE notes SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL', [req.params.id]);
-    if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
-    res.json({ success: true, message: 'Note moved to trash' });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+app.post('/api/notes', wrap(async (req, res) => {
+  const { title, content, tags } = req.body;
+  const status = STATUSES.includes(req.body.status) ? req.body.status : 'todo';
+  if (!title || !String(title).trim()) return res.status(400).json({ success: false, message: 'Title is required' });
+  const top = await db.exec_get(
+    'SELECT MIN(position) p FROM notes WHERE user_id = ? AND status = ? AND deleted_at IS NULL', [req.userId, status]);
+  const position = typeof req.body.position === 'number' ? req.body.position : (top?.p ?? 1) - 1;
+  const r = await db.exec_run(
+    'INSERT INTO notes (user_id, title, content, tags, status, position) VALUES (?, ?, ?, ?, ?, ?)',
+    [req.userId, String(title).trim(), content || '', tags || '', status, position]);
+  res.status(201).json({ success: true, data: await getOwnNote(r.lastInsertRowid, req.userId) });
+}));
 
-app.put('/api/notes/:id/restore', async (req, res) => {
-  try {
-    const r = await db.exec_run('UPDATE notes SET deleted_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?', [req.params.id]);
-    if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
-    res.json({ success: true, data: await db.exec_get('SELECT * FROM notes WHERE id = ?', [req.params.id]) });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+app.put('/api/notes/:id', wrap(async (req, res) => {
+  const note = await getOwnNote(req.params.id, req.userId);
+  if (!note || note.deleted_at) return res.status(404).json({ success: false, message: 'Note not found' });
+  const title   = req.body.title !== undefined ? String(req.body.title).trim() : note.title;
+  if (!title) return res.status(400).json({ success: false, message: 'Title is required' });
+  const content = req.body.content !== undefined ? req.body.content : note.content;
+  const tags    = req.body.tags    !== undefined ? req.body.tags    : note.tags;
+  const status  = STATUSES.includes(req.body.status) ? req.body.status : note.status;
+  await db.exec_run(
+    'UPDATE notes SET title=?, content=?, tags=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?',
+    [title, content, tags, status, note.id, req.userId]);
+  res.json({ success: true, data: await getOwnNote(note.id, req.userId) });
+}));
 
-app.delete('/api/notes/:id/permanent', async (req, res) => {
-  try {
-    const r = await db.exec_run('DELETE FROM notes WHERE id = ?', [req.params.id]);
-    if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
-    res.json({ success: true, message: 'Note permanently deleted' });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
+// Move a card on the board (status + order). Doesn't bump updated_at.
+app.patch('/api/notes/:id/move', wrap(async (req, res) => {
+  const { status, position } = req.body;
+  if (!STATUSES.includes(status) || typeof position !== 'number')
+    return res.status(400).json({ success: false, message: 'Invalid status or position' });
+  const r = await db.exec_run('UPDATE notes SET status=?, position=? WHERE id=? AND user_id=? AND deleted_at IS NULL',
+    [status, position, req.params.id, req.userId]);
+  if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true, data: await getOwnNote(req.params.id, req.userId) });
+}));
 
-app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+app.delete('/api/notes/:id', wrap(async (req, res) => {
+  const r = await db.exec_run('UPDATE notes SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND deleted_at IS NULL',
+    [req.params.id, req.userId]);
+  if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true, message: 'Note moved to trash' });
+}));
+
+app.put('/api/notes/:id/restore', wrap(async (req, res) => {
+  const r = await db.exec_run('UPDATE notes SET deleted_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?',
+    [req.params.id, req.userId]);
+  if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true, data: await getOwnNote(req.params.id, req.userId) });
+}));
+
+app.delete('/api/notes/:id/permanent', wrap(async (req, res) => {
+  const r = await db.exec_run('DELETE FROM notes WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
+  if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true, message: 'Note permanently deleted' });
+}));
+
+db.ready.then(() => {
+  app.listen(PORT, () => console.log(`🚀 API listening on http://localhost:${PORT}`));
+});

@@ -2,15 +2,15 @@
 
 ## Features
 
-- **User Authentication** — Sign up with email, sign in, forgot password with OTP verification via email
-- **CRUD Notes** — Create, read, update, and delete notes with title and content
-- **Soft Delete & Trash** — Deleted notes go to trash and can be restored or permanently deleted
-- **Tags & Filtering** — Add tags to notes and filter by tag with custom colors
-- **Search** — Real-time search by title or content
-- **Sort** — Sort notes by latest, earliest, A→Z, or Z→A
-- **Dark / Light Mode** — Toggle between dark and light themes
-- **Drag to Reorder** — Drag notes to rearrange their order
-- **Animated UI** — Smooth transitions, sliding login panel, rabbit mascot
+- **Kanban Board** — Every note is a card in To do / In progress / Done; drag cards between columns (order is saved)
+- **Rich Text Editor** — Headings, bold/italic/underline, highlight, links, lists, checklists, quotes, code blocks (TipTap)
+- **Checklist Progress** — Cards show how many checklist items are done
+- **List View** — All notes in one list, sortable by last edited, date created or title
+- **Tags** — Coloured tags, filter by tag from the sidebar
+- **Search** — Instant search across titles, content and tags (Ctrl+K)
+- **Trash** — Soft delete with Undo, restore, delete forever, empty trash
+- **Secure Accounts** — Token-based sessions, scrypt password hashing, every note scoped to its owner; forgot password via emailed OTP
+- **Dark / Light Mode** and a responsive layout for phones
 
 ---
 
@@ -165,3 +165,10 @@ function setTagColor(tag, color) {
 Applying color only to text looks plain. Using the same color for background and border with reduced opacity gives the tag chip a cohesive look. Saving to localStorage means users don't have to re-pick colors every time they reload the page.
 
 ---
+---
+
+## Deployment notes
+
+- **Frontend (Vercel)** reads the API URL from `VITE_API_URL` (defaults to the Railway URL).
+- **Backend (Railway)** stores SQLite at `DB_PATH` (defaults to `backend/notes.db`). To keep data across redeploys, attach a Railway Volume (e.g. mounted at `/data`) and set `DB_PATH=/data/notes.db`. On first boot the bundled `notes.db` is copied there.
+- `RESEND_API_KEY` is needed to send password-reset emails; without it the code is printed to the server log.
