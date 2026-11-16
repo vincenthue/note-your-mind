@@ -2,7 +2,7 @@ import { createClient } from '@libsql/client'
 
 // Production: Turso (TURSO_DATABASE_URL + TURSO_AUTH_TOKEN).
 // Local dev: a SQLite file next to this folder.
-const url = process.env.TURSO_DATABASE_URL || 'file:local.db'
+const url = process.env.TURSO_DATABASE_URL || (process.env.VERCEL ? ':memory:' : 'file:local.db')
 export const client = createClient({ url, authToken: process.env.TURSO_AUTH_TOKEN })
 
 // libSQL rows are array-like; turn them into plain objects keyed by column name
@@ -60,7 +60,11 @@ export const SCHEMA = [
   'CREATE INDEX IF NOT EXISTS idx_notes_user ON notes (user_id, deleted_at)',
 ]
 
+// On Vercel the filesystem is read-only, so a database URL is required there
+export const configured = Boolean(process.env.TURSO_DATABASE_URL) || !process.env.VERCEL
+
 async function init() {
+  if (!configured) throw Object.assign(new Error('TURSO_DATABASE_URL is not set'), { notConfigured: true })
   // One round trip: important on serverless cold starts
   await client.batch([
     ...SCHEMA,

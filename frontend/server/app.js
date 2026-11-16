@@ -18,9 +18,15 @@ app.use(cors({
   ],
 }));
 
+app.get('/api/health', (req, res) => res.json({ ok: true, service: 'note-your-mind-api', database: db.configured }));
+
 // Make sure tables exist before the first query (once per server / serverless instance)
 app.use(async (req, res, next) => {
-  try { await db.ready(); next(); } catch (e) { next(e); }
+  try { await db.ready(); next(); } catch (e) {
+    if (e.notConfigured)
+      return res.status(503).json({ success: false, message: 'The database is not set up yet. Please try again later.' });
+    next(e);
+  }
 });
 app.use(express.json({ limit: '2mb' }));
 
@@ -102,7 +108,6 @@ const wrap = fn => (req, res) => fn(req, res).catch(e => {
 
 const STATUSES = ['todo', 'doing', 'done'];
 
-app.get('/api/health', (req, res) => res.json({ ok: true, service: 'note-your-mind-api' }));
 
 // ── Availability checks ───────────────────────────
 app.post('/api/auth/check/username', wrap(async (req, res) => {
