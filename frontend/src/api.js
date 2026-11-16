@@ -1,6 +1,7 @@
 import axios from 'axios'
 
-export const API_URL = import.meta.env.VITE_API_URL || 'https://note-your-mind-production.up.railway.app'
+// The API is served from the same site under /api (Vercel function), so no base URL is needed.
+export const API_URL = import.meta.env.VITE_API_URL || ''
 
 export const api = axios.create({ baseURL: API_URL })
 

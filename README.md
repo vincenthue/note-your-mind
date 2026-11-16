@@ -18,67 +18,33 @@
 
 ```
 Note-Your-Mind/
-├── frontend/           # Vue 3 frontend
-│   ├── src/
-│   │   ├── App.vue         # Main notes application
-│   │   ├── main.js         # Vue app entry point
-│   │   └── views/
-│   │       └── AuthPage.vue    # Login / Sign up page
-│   ├── Dockerfile
-│   └── nginx.conf
-├── backend/            # Node.js backend
-│   ├── server.js       # Express API routes
-│   ├── db.js           # SQLite database setup
-│   ├── notes.db        # SQLite database file
-│   └── Dockerfile
-├── docker-compose.yml
-└── README.md
+└── frontend/               # One Vercel project: Vue app + API
+    ├── src/                # Vue 3 app (App.vue, components/, views/)
+    ├── api/index.js        # Vercel serverless function — serves every /api/* request
+    ├── server/
+    │   ├── app.js          # Express API routes
+    │   ├── db.js           # libSQL client (Turso in production, local.db in dev)
+    │   ├── dev.js          # Local API server on port 3000
+    │   └── migrate.js      # One-time import from an old notes.db
+    └── vercel.json         # Rewrites /api/* to the function
 ```
+
+Live site: [https://noteyourmind.com](https://noteyourmind.com) (API at `/api`).
 
 ---
 
-## Setup & Running the Application
+## Running locally
 
-### Option 1: Docker (Recommended)
+**Prerequisites:** Node.js 22+
 
-**Prerequisites:** [Docker Desktop]
-
-```bash
-# Clone the repository
-git clone https://github.com/vincenthue/note-your-mind.git
-cd note-your-mind
-
-# Build and run
-docker-compose up --build
-```
-
-- Frontend: [https://noteyourmind.com](https://noteyourmind.com)
-- Backend API: [https://note-your-mind-production.up.railway.app](https://note-your-mind-production.up.railway.app)
-
----
-
-### Option 2: Manual Setup
-
-**Prerequisites:** Node.js v18+
-
-#### Backend
-```bash
-cd backend
-npm install
-node server.js
-```
-Server runs on `http://localhost:3000`
-
-#### Frontend
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run api    # terminal 1 — API on http://localhost:3000 (creates local.db)
+npm run dev    # terminal 2 — app on http://localhost:5173 (proxies /api to :3000)
 ```
-App runs on `http://localhost:5174`
 
 ---
-
 
 ## Development Process 
 
@@ -169,6 +135,7 @@ Applying color only to text looks plain. Using the same color for background and
 
 ## Deployment notes
 
-- **Frontend (Vercel)** reads the API URL from `VITE_API_URL` (defaults to the Railway URL).
-- **Backend (Railway)** stores SQLite at `DB_PATH` (defaults to `backend/notes.db`). To keep data across redeploys, attach a Railway Volume (e.g. mounted at `/data`) and set `DB_PATH=/data/notes.db`. On first boot the bundled `notes.db` is copied there.
+- Everything deploys from the `frontend` folder as one **Vercel** project (free tier). The API runs as a serverless function under `/api`, so no separate backend host is needed.
+- Data lives in **Turso** (hosted SQLite, free tier). Set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in the Vercel project's environment variables. Without them the API falls back to a local `local.db` file (fine for development only).
 - `RESEND_API_KEY` is needed to send password-reset emails; without it the code is printed to the server log.
+- To import an old SQLite database: put the two Turso variables in `frontend/.env`, then run `npm run migrate -- path/to/notes.db` (safe to re-run).
