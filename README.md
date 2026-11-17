@@ -24,8 +24,7 @@ Note-Your-Mind/
     ├── server/
     │   ├── app.js          # Express API routes
     │   ├── db.js           # libSQL client (Turso in production, local.db in dev)
-    │   ├── dev.js          # Local API server on port 3000
-    │   └── migrate.js      # One-time import from an old notes.db
+    │   └── dev.js          # Local API server on port 3000
     └── vercel.json         # Rewrites /api/* to the function
 ```
 
@@ -138,4 +137,3 @@ Applying color only to text looks plain. Using the same color for background and
 - Everything deploys from the `frontend` folder as one **Vercel** project (free tier). The API runs as a serverless function under `/api`, so no separate backend host is needed.
 - Data lives in **Turso** (hosted SQLite, free tier). Set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in the Vercel project's environment variables. Without them the API falls back to a local `local.db` file (fine for development only).
 - `RESEND_API_KEY` is needed to send password-reset emails; without it the code is printed to the server log.
-- To import an old SQLite database: put the two Turso variables in `frontend/.env`, then run `npm run migrate -- path/to/notes.db` (safe to re-run).
