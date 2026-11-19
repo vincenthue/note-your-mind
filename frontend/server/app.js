@@ -305,6 +305,87 @@ app.delete('/api/notes/:id/permanent', wrap(async (req, res) => {
   res.json({ success: true, message: 'Note permanently deleted' });
 }));
 
+// ── Day notes (one-day timetable) ─────────────────
+app.use('/api/daynotes', requireAuth);
+
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const DAY_RE  = /^\d{4}-\d{2}-\d{2}$/;
+const ENTRY_STATUSES = ['waiting', 'done'];
+
+// Accepts the client's note and returns a clean copy, or a string describing what is wrong.
+function cleanDayNote(body) {
+  const title = String(body?.title ?? '').trim().slice(0, 200) || 'Untitled day';
+  const day = String(body?.day ?? '');
+  if (!DAY_RE.test(day)) return 'Pick a date.';
+  const d = body?.data;
+  if (!d || typeof d !== 'object') return 'Invalid note.';
+  if (!TIME_RE.test(d.start) || !TIME_RE.test(d.end) || d.start >= d.end) return 'The end time must be after the start time.';
+  if (!Array.isArray(d.columns) || !d.columns.length || d.columns.length > 20) return 'A note needs 1 to 20 columns.';
+  const columns = d.columns.map(c => ({ id: String(c?.id ?? '').slice(0, 40), name: String(c?.name ?? '').trim().slice(0, 60) }));
+  if (columns.some(c => !c.id || !c.name)) return 'Every column needs a name.';
+  const colIds = new Set(columns.map(c => c.id));
+  const extraTimes = Array.isArray(d.extraTimes) ? [...new Set(d.extraTimes.filter(t => TIME_RE.test(t)))].slice(0, 100) : [];
+  const cells = {};
+  let count = 0;
+  for (const [time, row] of Object.entries(d.cells || {})) {
+    if (!TIME_RE.test(time) || !row || typeof row !== 'object') continue;
+    for (const [colId, list] of Object.entries(row)) {
+      if (!colIds.has(colId) || !Array.isArray(list)) continue;
+      const entries = list
+        .map(e => ({
+          id: String(e?.id ?? '').slice(0, 40),
+          text: String(e?.text ?? '').trim().slice(0, 500),
+          status: ENTRY_STATUSES.includes(e?.status) ? e.status : 'waiting',
+        }))
+        .filter(e => e.id && e.text);
+      if (!entries.length) continue;
+      count += entries.length;
+      (cells[time] ||= {})[colId] = entries;
+    }
+  }
+  if (count > 2000) return 'Too many entries in one note.';
+  return { title, day, data: JSON.stringify({ start: d.start, end: d.end, columns, extraTimes, cells }) };
+}
+
+const toDayNote = row => row && { ...row, data: JSON.parse(row.data) };
+const getOwnDayNote = async (id, userId) =>
+  toDayNote(await db.get('SELECT * FROM day_notes WHERE id = ? AND user_id = ?', [id, userId]));
+
+app.get('/api/daynotes', wrap(async (req, res) => {
+  const rows = await db.all('SELECT * FROM day_notes WHERE user_id = ? ORDER BY day DESC, updated_at DESC', [req.userId]);
+  res.json({ success: true, data: rows.map(toDayNote) });
+}));
+
+app.get('/api/daynotes/:id', wrap(async (req, res) => {
+  const note = await getOwnDayNote(req.params.id, req.userId);
+  if (!note) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true, data: note });
+}));
+
+app.post('/api/daynotes', wrap(async (req, res) => {
+  const clean = cleanDayNote(req.body);
+  if (typeof clean === 'string') return res.status(400).json({ success: false, message: clean });
+  const r = await db.run('INSERT INTO day_notes (user_id, title, day, data) VALUES (?, ?, ?, ?)',
+    [req.userId, clean.title, clean.day, clean.data]);
+  res.status(201).json({ success: true, data: await getOwnDayNote(r.lastInsertRowid, req.userId) });
+}));
+
+app.put('/api/daynotes/:id', wrap(async (req, res) => {
+  const clean = cleanDayNote(req.body);
+  if (typeof clean === 'string') return res.status(400).json({ success: false, message: clean });
+  const r = await db.run(
+    'UPDATE day_notes SET title=?, day=?, data=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?',
+    [clean.title, clean.day, clean.data, req.params.id, req.userId]);
+  if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true, data: await getOwnDayNote(req.params.id, req.userId) });
+}));
+
+app.delete('/api/daynotes/:id', wrap(async (req, res) => {
+  const r = await db.run('DELETE FROM day_notes WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
+  if (r.changes === 0) return res.status(404).json({ success: false, message: 'Note not found' });
+  res.json({ success: true });
+}));
+
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ success: false, message: 'Server error.' });

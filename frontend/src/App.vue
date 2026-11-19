@@ -81,7 +81,7 @@
               </div>
             </Transition>
           </div>
-          <button v-if="view !== 'trash'" class="btn btn-primary" title="New note (Alt+N)" @click="openEditor(null)">
+          <button v-if="view !== 'trash'" class="btn btn-primary" title="New note (Alt+N)" @click="newNote">
             <svg width="13" height="13" viewBox="0 0 14 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 2.5v9M2.5 7h9"/></svg>
             <span class="hide-sm">New note</span>
           </button>
@@ -96,6 +96,19 @@
           <p class="state-text">{{ loadError }}</p>
           <button class="btn" @click="loadAll">Try again</button>
         </div>
+
+        <template v-else-if="view === 'day'">
+          <div v-if="!visibleDayNotes.length && search" class="state">
+            <p class="state-title">No matching notes</p>
+            <p class="state-text">Try a different search.</p>
+          </div>
+          <div v-else-if="!dayNotes.length" class="state">
+            <p class="state-title">No day notes yet</p>
+            <p class="state-text">Plan a day hour by hour: Default setup, Assigned task and Venue for every time slot.</p>
+            <button class="btn btn-primary" @click="openDayEditor(null)">New note</button>
+          </div>
+          <DayNoteList v-else :notes="visibleDayNotes" @open="openDayEditor" @create="openDayEditor(null)" />
+        </template>
 
         <template v-else-if="view === 'board'">
           <KanbanBoard :notes="visibleNotes" @open="openEditor" @create="s => openEditor(null, s)"
@@ -141,6 +154,17 @@
       />
     </Transition>
 
+    <Transition name="fade">
+      <DayNoteEditor
+        v-if="dayEditor.open"
+        :key="dayEditor.key"
+        :note="dayEditor.note"
+        :on-save="saveDayNote"
+        @close="dayEditor.open = false"
+        @delete="deleteDayNote"
+      />
+    </Transition>
+
     <ConfirmDialog />
 
     <Transition name="pop">
@@ -161,6 +185,9 @@ import KanbanBoard from './components/KanbanBoard.vue'
 import NoteList from './components/NoteList.vue'
 const NoteEditor = defineAsyncComponent(() => import('./components/NoteEditor.vue'))
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import DayNoteList from './components/DayNoteList.vue'
+import { allEntries } from './daynote'
+const DayNoteEditor = defineAsyncComponent(() => import('./components/DayNoteEditor.vue'))
 
 const props = defineProps({ user: Object })
 const emit = defineEmits(['logout'])
@@ -176,7 +203,8 @@ const notes = ref([])
 const trash = ref([])
 const loading = ref(true)
 const loadError = ref('')
-const view = ref(store.get('nym_view', 'board'))
+const dayNotes = ref([])
+const view = ref(store.get('nym_view', 'day'))
 const search = ref('')
 const activeTag = ref(null)
 const sort = ref(store.get('nym_sort', 'updated'))
@@ -211,6 +239,12 @@ function matches(n) {
 }
 const visibleNotes = computed(() => notes.value.filter(matches))
 const visibleTrash = computed(() => trash.value.filter(matches))
+const visibleDayNotes = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return dayNotes.value
+  return dayNotes.value.filter(n => n.title.toLowerCase().includes(q) ||
+    allEntries(n.data).some(e => e.text.toLowerCase().includes(q)))
+})
 
 const sortOptions = [
   { value: 'updated', label: 'Last edited' },
@@ -236,16 +270,18 @@ const allTags = computed(() => {
 watch(allTags, tags => { if (activeTag.value && !tags.some(t => t.name === activeTag.value)) activeTag.value = null })
 
 const ICONS = {
+  day: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.8v2.4M10.5 1.8v2.4M5.5 9.5h1.5M5.5 11.8h1.5M9 9.5h1.5"/></svg>',
   board: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.8" y="2.5" width="3.6" height="11" rx="1"/><rect x="6.2" y="2.5" width="3.6" height="7.5" rx="1"/><rect x="10.6" y="2.5" width="3.6" height="9.5" rx="1"/></svg>',
   list: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.6" cy="4" r=".6" fill="currentColor"/><circle cx="2.6" cy="8" r=".6" fill="currentColor"/><circle cx="2.6" cy="12" r=".6" fill="currentColor"/></svg>',
   trash: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4h11M6 4V2.8h4V4M4 4l.7 9.2h6.6L12 4"/></svg>',
 }
 const navItems = computed(() => [
+  { id: 'day', label: 'Day notes', icon: ICONS.day, count: dayNotes.value.length },
   { id: 'board', label: 'Board', icon: ICONS.board, count: notes.value.length },
   { id: 'list', label: 'All notes', icon: ICONS.list, count: notes.value.length },
   { id: 'trash', label: 'Trash', icon: ICONS.trash, count: trash.value.length || '' },
 ])
-const pageTitle = computed(() => ({ board: 'Board', list: 'All notes', trash: 'Trash' })[view.value])
+const pageTitle = computed(() => ({ day: 'Day notes', board: 'Board', list: 'All notes', trash: 'Trash' })[view.value])
 
 function go(id) { view.value = id }
 function toggleTag(t) { activeTag.value = activeTag.value === t ? null : t; navOpen.value = false }
@@ -255,9 +291,10 @@ async function loadAll() {
   loading.value = true
   loadError.value = ''
   try {
-    const [a, b] = await Promise.all([api.get('/api/notes'), api.get('/api/notes/trash')])
+    const [a, b, c] = await Promise.all([api.get('/api/notes'), api.get('/api/notes/trash'), api.get('/api/daynotes')])
     notes.value = a.data.data
     trash.value = b.data.data
+    dayNotes.value = c.data.data
   } catch (err) {
     loadError.value = errorMessage(err)
   } finally {
@@ -287,6 +324,39 @@ async function saveNote(payload) {
     replaceNote(data.data)
     notify('Note created')
   }
+}
+
+// ── Day notes ──
+const dayEditor = reactive({ open: false, note: null, key: 0 })
+function openDayEditor(note = null) {
+  Object.assign(dayEditor, { open: true, note, key: dayEditor.key + 1 })
+}
+function newNote() {
+  if (view.value === 'day') openDayEditor(null)
+  else openEditor(null)
+}
+
+async function saveDayNote(payload) {
+  const sortDays = list => list.sort((a, b) => b.day.localeCompare(a.day) || String(b.updated_at).localeCompare(String(a.updated_at)))
+  if (dayEditor.note) {
+    const { data } = await api.put(`/api/daynotes/${dayEditor.note.id}`, payload)
+    dayNotes.value = sortDays(dayNotes.value.map(n => (n.id === data.data.id ? data.data : n)))
+  } else {
+    const { data } = await api.post('/api/daynotes', payload)
+    dayNotes.value = sortDays([data.data, ...dayNotes.value])
+  }
+  notify(`Note saved — “${payload.title || 'Untitled day'}”`)
+}
+
+async function deleteDayNote(note) {
+  const ok = await confirmDialog({ title: 'Delete this note?', message: `“${note.title}” and all its entries will be deleted. This can’t be undone.`, confirmText: 'Delete', danger: true })
+  if (!ok) return
+  try {
+    await api.delete(`/api/daynotes/${note.id}`)
+    dayNotes.value = dayNotes.value.filter(n => n.id !== note.id)
+    dayEditor.open = false
+    notify('Note deleted')
+  } catch (err) { notify(errorMessage(err), 'err') }
 }
 
 async function quickAdd(status, title) {
@@ -360,11 +430,11 @@ async function signOut() {
 
 // ── Keyboard ──
 function onKey(e) {
-  if (confirmState.open || editor.open) return
+  if (confirmState.open || editor.open || dayEditor.open) return
   const mod = e.ctrlKey || e.metaKey
   if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); searchEl.value?.focus() }
   else if ((e.altKey && e.key.toLowerCase() === 'n') || (mod && e.key.toLowerCase() === 'n' && !e.shiftKey)) {
-    if (view.value !== 'trash') { e.preventDefault(); openEditor(null) }
+    if (view.value !== 'trash') { e.preventDefault(); newNote() }
   }
 }
 function onDocClick(e) { if (sortWrap.value && !sortWrap.value.contains(e.target)) sortOpen.value = false }

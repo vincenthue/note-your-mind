@@ -58,6 +58,17 @@ export const SCHEMA = [
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
   'CREATE INDEX IF NOT EXISTS idx_notes_user ON notes (user_id, deleted_at)',
+  // Day notes: a one-day timetable. `data` is JSON: { start, end, columns, cells }
+  `CREATE TABLE IF NOT EXISTS day_notes (
+    id         INTEGER  PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER  NOT NULL,
+    title      TEXT     NOT NULL,
+    day        TEXT     NOT NULL,
+    data       TEXT     NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_day_notes_user ON day_notes (user_id)',
 ]
 
 // On Vercel the filesystem is read-only, so a database URL is required there
