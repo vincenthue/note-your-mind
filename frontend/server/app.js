@@ -311,6 +311,7 @@ app.use('/api/daynotes', requireAuth);
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAY_RE  = /^\d{4}-\d{2}-\d{2}$/;
 const ENTRY_STATUSES = ['waiting', 'done'];
+const SESSION_FORMATS = ['', 'combined', 'split'];
 
 // Accepts the client's note and returns a clean copy, or a string describing what is wrong.
 function cleanDayNote(body) {
@@ -319,32 +320,45 @@ function cleanDayNote(body) {
   if (!DAY_RE.test(day)) return 'Pick a date.';
   const d = body?.data;
   if (!d || typeof d !== 'object') return 'Invalid note.';
-  if (!TIME_RE.test(d.start) || !TIME_RE.test(d.end) || d.start >= d.end) return 'The end time must be after the start time.';
   if (!Array.isArray(d.columns) || !d.columns.length || d.columns.length > 20) return 'A note needs 1 to 20 columns.';
   const columns = d.columns.map(c => ({ id: String(c?.id ?? '').slice(0, 40), name: String(c?.name ?? '').trim().slice(0, 60) }));
   if (columns.some(c => !c.id || !c.name)) return 'Every column needs a name.';
   const colIds = new Set(columns.map(c => c.id));
-  const extraTimes = Array.isArray(d.extraTimes) ? [...new Set(d.extraTimes.filter(t => TIME_RE.test(t)))].slice(0, 100) : [];
-  const cells = {};
+  if (!Array.isArray(d.sessions) || d.sessions.length > 100) return 'A note can have up to 100 sessions.';
   let count = 0;
-  for (const [time, row] of Object.entries(d.cells || {})) {
-    if (!TIME_RE.test(time) || !row || typeof row !== 'object') continue;
-    for (const [colId, list] of Object.entries(row)) {
+  const sessions = [];
+  for (const s of d.sessions) {
+    const id = String(s?.id ?? '').slice(0, 40);
+    if (!id || !TIME_RE.test(s?.time)) return 'Every session needs a time.';
+    const cells = {};
+    for (const [colId, list] of Object.entries(s.cells || {})) {
       if (!colIds.has(colId) || !Array.isArray(list)) continue;
       const entries = list
         .map(e => ({
           id: String(e?.id ?? '').slice(0, 40),
           text: String(e?.text ?? '').trim().slice(0, 500),
           status: ENTRY_STATUSES.includes(e?.status) ? e.status : 'waiting',
+          ...(e?.packed === true && { packed: true }),
+          ...(e?.noPack === true && { noPack: true }),
         }))
         .filter(e => e.id && e.text);
       if (!entries.length) continue;
       count += entries.length;
-      (cells[time] ||= {})[colId] = entries;
+      cells[colId] = entries;
     }
+    sessions.push({
+      id,
+      time: s.time,
+      name: String(s.name ?? '').trim().slice(0, 200),
+      format: SESSION_FORMATS.includes(s.format) ? s.format : '',
+      hall: String(s.hall ?? '').trim().slice(0, 60),
+      cells,
+    });
   }
   if (count > 2000) return 'Too many entries in one note.';
-  return { title, day, data: JSON.stringify({ start: d.start, end: d.end, columns, extraTimes, cells }) };
+  sessions.sort((a, b) => a.time.localeCompare(b.time));
+  const venueContact = String(d.venueContact ?? '').trim().slice(0, 80);
+  return { title, day, data: JSON.stringify({ columns, sessions, venueContact }) };
 }
 
 const toDayNote = row => row && { ...row, data: JSON.parse(row.data) };

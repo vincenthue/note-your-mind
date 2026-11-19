@@ -1,21 +1,23 @@
 <template>
   <div class="dl">
-    <article v-for="n in notes" :key="n.id" class="dl-card" tabindex="0" role="button"
-      @click="$emit('open', n)" @keydown.enter="$emit('open', n)">
+    <article v-for="n in cards" :key="n.id" class="dl-card" tabindex="0" role="button"
+      @click="$emit('open', n.note)" @keydown.enter="$emit('open', n.note)">
       <div class="dl-head">
-        <span class="dl-title">{{ n.title }}</span>
-        <span class="dl-date">{{ formatDay(n.day) }} · {{ n.data.start }} – {{ n.data.end }}</span>
+        <span class="dl-title">{{ n.note.title }}</span>
+        <span class="dl-date">{{ formatDay(n.note.day) }}<template v-if="n.sessions.length"> · {{ n.sessions[0].time }} – {{ n.sessions[n.sessions.length - 1].time }}</template></span>
       </div>
-      <div v-if="preview(n).length" class="dl-rows">
-        <div v-for="e in preview(n)" :key="e.id" class="dl-row">
-          <span class="dl-time">{{ e.time }}</span>
-          <span class="dl-pill"><span class="dl-ring" aria-hidden="true"></span><span class="dl-pill-text">{{ e.text }}</span></span>
+      <div v-if="n.sessions.length" class="dl-rows">
+        <div v-for="s in n.sessions.slice(0, 3)" :key="s.id" class="dl-row">
+          <span class="dl-time">{{ s.time }}</span>
+          <span class="dl-sess">{{ s.name || 'Untitled session' }}</span>
         </div>
+        <span v-if="n.sessions.length > 3" class="dl-more">+ {{ n.sessions.length - 3 }} more</span>
       </div>
-      <p v-else class="dl-empty">No entries yet</p>
+      <p v-else class="dl-empty">No sessions yet</p>
+      <div v-if="n.total" class="dl-meter" aria-hidden="true"><div :style="{ width: (n.done / n.total) * 100 + '%' }"></div></div>
       <div class="dl-foot">
-        <span>{{ count(n) }} entr{{ count(n) === 1 ? 'y' : 'ies' }}</span>
-        <span>{{ relativeDate(n.updated_at) }}</span>
+        <span>{{ n.sessions.length }} session{{ n.sessions.length === 1 ? '' : 's' }}<template v-if="n.total"> · {{ n.done === n.total ? 'all done' : `${n.done} of ${n.total} done` }}</template></span>
+        <span>{{ relativeDate(n.note.updated_at) }}</span>
       </div>
     </article>
     <button class="dl-new" @click="$emit('create')">
@@ -25,14 +27,17 @@
 </template>
 
 <script setup>
-import { allEntries, formatDay } from '../daynote'
+import { computed } from 'vue'
+import { allEntries, sessionsOf, formatDay } from '../daynote'
 import { relativeDate } from '../utils'
 
-defineProps({ notes: { type: Array, required: true } })
+const props = defineProps({ notes: { type: Array, required: true } })
 defineEmits(['open', 'create'])
 
-const preview = n => allEntries(n.data).slice(0, 3)
-const count = n => allEntries(n.data).length
+const cards = computed(() => props.notes.map(note => {
+  const entries = allEntries(note.data)
+  return { id: note.id, note, sessions: sessionsOf(note.data), total: entries.length, done: entries.filter(e => e.status === 'done').length }
+}))
 </script>
 
 <style scoped>
@@ -46,17 +51,15 @@ const count = n => allEntries(n.data).length
 .dl-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .dl-title { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dl-date { color: var(--text-3); font-size: 12.5px; }
-.dl-rows { display: flex; flex-direction: column; gap: 5px; }
-.dl-row { display: flex; align-items: center; gap: 10px; font-size: 12px; min-width: 0; }
-.dl-time { width: 38px; flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; }
-.dl-pill {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; height: 22px; padding: 0 10px 0 6px;
-  border-radius: 999px; background: #F5C542; color: #1F1700; font-weight: 500;
-}
-.dl-ring { flex: none; width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid currentColor; }
-.dl-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-rows { display: flex; flex-direction: column; gap: 6px; }
+.dl-row { display: flex; align-items: center; gap: 10px; font-size: 13px; min-width: 0; }
+.dl-time { width: 40px; flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.dl-sess { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-more { color: var(--text-3); font-size: 12px; padding-left: 50px; }
 .dl-empty { margin: 0; color: var(--text-3); font-size: 12.5px; }
-.dl-foot { display: flex; justify-content: space-between; margin-top: auto; color: var(--text-3); font-size: 12px; }
+.dl-meter { height: 6px; border-radius: 999px; background: var(--bg-hover); overflow: hidden; }
+.dl-meter div { height: 100%; background: #2DD4BF; }
+.dl-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: auto; color: var(--text-3); font-size: 12px; }
 .dl-new {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 170px;
   background: transparent; border: 1.5px dashed var(--border-strong); border-radius: 12px;

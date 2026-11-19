@@ -104,7 +104,7 @@
           </div>
           <div v-else-if="!dayNotes.length" class="state">
             <p class="state-title">No day notes yet</p>
-            <p class="state-text">Plan a day hour by hour: Default setup, Assigned task and Venue for every time slot.</p>
+            <p class="state-text">Write your program flow session by session: what to set up, who does what, and what to confirm with the venue.</p>
             <button class="btn btn-primary" @click="openDayEditor(null)">New note</button>
           </div>
           <DayNoteList v-else :notes="visibleDayNotes" @open="openDayEditor" @create="openDayEditor(null)" />
@@ -186,7 +186,7 @@ import NoteList from './components/NoteList.vue'
 const NoteEditor = defineAsyncComponent(() => import('./components/NoteEditor.vue'))
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import DayNoteList from './components/DayNoteList.vue'
-import { allEntries } from './daynote'
+import { allEntries, sessionsOf } from './daynote'
 const DayNoteEditor = defineAsyncComponent(() => import('./components/DayNoteEditor.vue'))
 
 const props = defineProps({ user: Object })
@@ -243,6 +243,7 @@ const visibleDayNotes = computed(() => {
   const q = search.value.trim().toLowerCase()
   if (!q) return dayNotes.value
   return dayNotes.value.filter(n => n.title.toLowerCase().includes(q) ||
+    sessionsOf(n.data).some(s => s.name.toLowerCase().includes(q)) ||
     allEntries(n.data).some(e => e.text.toLowerCase().includes(q)))
 })
 
@@ -336,7 +337,8 @@ function newNote() {
   else openEditor(null)
 }
 
-async function saveDayNote(payload) {
+// Saved notes save themselves quietly after each change; a new note is created by its Save button and stays open.
+async function saveDayNote(payload, { quiet = false } = {}) {
   const sortDays = list => list.sort((a, b) => b.day.localeCompare(a.day) || String(b.updated_at).localeCompare(String(a.updated_at)))
   if (dayEditor.note) {
     const { data } = await api.put(`/api/daynotes/${dayEditor.note.id}`, payload)
@@ -344,8 +346,9 @@ async function saveDayNote(payload) {
   } else {
     const { data } = await api.post('/api/daynotes', payload)
     dayNotes.value = sortDays([data.data, ...dayNotes.value])
+    dayEditor.note = data.data
   }
-  notify(`Note saved — “${payload.title || 'Untitled day'}”`)
+  if (!quiet) notify(`Note saved — “${payload.title || 'Untitled day'}”`)
 }
 
 async function deleteDayNote(note) {
