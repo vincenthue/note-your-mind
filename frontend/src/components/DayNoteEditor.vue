@@ -687,8 +687,7 @@ onUnmounted(() => {
   padding: 4px; resize: none; overflow: hidden; font: inherit; font-size: 13px; line-height: 1.35; color: var(--text);
 }
 .dn-cell-input::placeholder { color: var(--text-3); }
-.dn-cell-add { display: none; font-size: 12.5px; color: var(--accent); padding: 1px 4px; }
-.dn-cell:hover .dn-cell-add { display: block; }
+.dn-cell-add { display: block; font-size: 12.5px; color: var(--accent); padding: 1px 4px; }
 .dn-add-session {
   display: flex; align-items: center; width: 100%; height: 40px; padding: 0 14px;
   border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--accent); font-weight: 500; font-size: 13px;
