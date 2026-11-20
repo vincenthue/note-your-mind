@@ -79,15 +79,17 @@
                     @menu="el => openEntryMenu(s, col.id, e, el)"
                   />
                 </template>
-                <input
+                <textarea
                   v-if="isActive(s.id, col.id)"
                   :ref="el => { if (el) cellInput = el }"
                   v-model="draft"
                   class="dn-cell-input"
+                  rows="1"
                   maxlength="500"
                   :placeholder="active.editId ? 'Edit, then press Enter' : entriesIn(s, col.id).length ? 'Add another…' : 'Type, then press Enter'"
                   @mousedown.stop
-                  @keydown.enter.prevent="onEnter"
+                  @input="autoGrow"
+                  @keydown.enter="onEnter"
                   @keydown.esc.stop.prevent="closeCell"
                   @blur="isActive(s.id, col.id) && commit(false)"
                 />
@@ -99,7 +101,7 @@
           </div>
         </div>
         <p class="dn-hint">
-          Click a cell to type; Enter adds an entry. Click an entry to copy it, double-click to copy and mark it done, or click its circle.
+          Click a cell to type; Enter adds an entry, Shift+Enter starts a new line in the same entry. Click an entry to copy it, double-click to copy and mark it done, or click its circle.
           Write <b>@name</b> to highlight who does it. Setup turns red if not done when its session starts; tasks and venue items when the session ends.
         </p>
       </template>
@@ -396,6 +398,7 @@ async function openCell(sid, col, editEntryObj = null) {
   active.value = { sid, col, editId: editEntryObj?.id }
   draft.value = editEntryObj?.text || ''
   await nextTick()
+  autoGrow()
   cellInput?.focus()
 }
 function onCellDown(e, sid, col) {
@@ -427,9 +430,18 @@ function commit(keepOpen) {
   if (keepOpen && s) active.value = { sid: a.sid, col: a.col }
   else active.value = null
 }
+// Enter adds the entry; Shift+Enter starts a new line inside the same entry.
 function onEnter(e) {
-  if (e.isComposing) return // still choosing characters in a Chinese/Japanese input method
+  if (e.isComposing || e.shiftKey) return // still choosing characters in an IME, or a line break
+  e.preventDefault()
   commit(true)
+  nextTick(autoGrow)
+}
+function autoGrow() {
+  const el = cellInput
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
 }
 function removeEntry(s, col, e) {
   const list = s.cells[col]
@@ -671,8 +683,8 @@ onUnmounted(() => {
 .dn-cell:hover { background: var(--bg-hover); }
 .dn-cell.on { box-shadow: inset 0 0 0 2px var(--accent); background: transparent; }
 .dn-cell-input {
-  width: 100%; height: 26px; border: 0; outline: 0; background: transparent; padding: 0 4px;
-  font-size: 13px; color: var(--text);
+  display: block; width: 100%; min-height: 26px; box-sizing: border-box; border: 0; outline: 0; background: transparent;
+  padding: 4px; resize: none; overflow: hidden; font: inherit; font-size: 13px; line-height: 1.35; color: var(--text);
 }
 .dn-cell-input::placeholder { color: var(--text-3); }
 .dn-cell-add { display: none; font-size: 12.5px; color: var(--accent); padding: 1px 4px; }

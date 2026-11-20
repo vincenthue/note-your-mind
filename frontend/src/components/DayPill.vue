@@ -57,10 +57,10 @@ function onClick() {
 <style scoped>
 .pill {
   display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 3px 4px 3px 6px;
-  border-radius: 999px; font-size: 13px; font-weight: 500; cursor: pointer; user-select: none;
+  border-radius: 13px; font-size: 13px; font-weight: 500; cursor: pointer; user-select: none;
   -webkit-touch-callout: none;
 }
-.pill--big { min-height: 34px; padding: 4px 10px 4px 8px; font-size: 14px; }
+.pill--big { min-height: 34px; padding: 4px 10px 4px 8px; font-size: 14px; border-radius: 17px; }
 .pill--waiting { background: #F5C542; color: #1F1700; }
 .pill--done { background: #2DD4BF; color: #04201C; }
 .pill--overdue { background: #F26D6D; color: #2A0606; }
@@ -71,7 +71,7 @@ function onClick() {
 }
 .pill--big .pill-ring { width: 18px; height: 18px; font-size: 11px; }
 .pill-ring:hover { background: rgba(0, 0, 0, 0.12); }
-.pill-text { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
+.pill-text { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; white-space: pre-line; }
 .pill-name { font-weight: 700; padding: 0 5px; margin: 0 1px; border-radius: 999px; background: rgba(0, 0, 0, 0.14); }
 .pill-label { flex: none; font-size: 11px; opacity: .7; padding-right: 6px; }
 .pill-more {
